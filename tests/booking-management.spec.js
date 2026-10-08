@@ -17,20 +17,21 @@ async function login(page) {
 
 /**
  * Books the first available (non-sold-out) event on the events page.
- * Returns { bookingRef, eventTitle } from the confirmation card.
+ * Returns { bookingRef, eventTitle } and leaves the page on the confirmation card.
  * Precondition: user must be logged in before calling.
  */
 async function bookEvent(page) {
   await page.goto(`${BASE_URL}/events`);
 
-  // Pick the first card that has a visible "Book Now" button (not sold out)
+  // Sold-out cards still render book-now-btn (as "Sold Out"), so filter on the button text
   const firstCard = page.getByTestId('event-card').filter({
-    has: page.getByTestId('book-now-btn'),
+    has: page.getByTestId('book-now-btn').filter({ hasText: 'Book Now' }),
   }).first();
   await expect(firstCard).toBeVisible();
 
   // Capture title before navigating away
-  const eventTitle = (await firstCard.locator('h3').textContent())?.trim() ?? '';
+  const eventTitle = (await firstCard.getByRole('heading').textContent())?.trim() ?? '';
+  expect(eventTitle, 'event title should be captured from the card').not.toBe('');
   console.log(`Booking event: "${eventTitle}"`);
 
   await firstCard.getByTestId('book-now-btn').click();
@@ -46,18 +47,17 @@ async function bookEvent(page) {
   const refEl = page.locator('.booking-ref').first();
   await expect(refEl).toBeVisible();
   const bookingRef = (await refEl.textContent())?.trim() ?? '';
+  expect(bookingRef, 'booking ref should be shown on confirmation').not.toBe('');
   console.log(`Booking confirmed. Ref: ${bookingRef}`);
   return { bookingRef, eventTitle };
 }
 
 /**
- * Clears all bookings. Safe to call when already empty.
+ * Clears all bookings. The "Clear all bookings" button is always rendered,
+ * so this is safe to call when the list is already empty.
  */
 async function clearBookings(page) {
   await page.goto(`${BASE_URL}/bookings`);
-  const alreadyEmpty = await page.getByText('No bookings yet').isVisible().catch(() => false);
-  if (alreadyEmpty) return;
-
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: /clear all bookings/i }).click();
   await expect(page.getByText('No bookings yet')).toBeVisible();
@@ -98,12 +98,12 @@ test.describe('Booking Management — Critical Happy Paths', () => {
     await card.getByRole('link', { name: 'View Details' }).click();
     await expect(page).toHaveURL(/\/bookings\/\d+/);
 
-    // -- Step 3: Verify breadcrumb shows booking ref --
-    await expect(page.locator('span.font-mono.font-bold').first()).toContainText(bookingRef);
+    // -- Step 3: Verify booking ref is shown (breadcrumb + header badge) --
+    await expect(page.getByText(bookingRef).first()).toBeVisible();
 
-    // -- Step 4: Verify event details section --
+    // -- Step 4: Verify event details section and page heading --
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(eventTitle);
     await expect(page.getByText('Event Details')).toBeVisible();
-    await expect(page.getByText(eventTitle).first()).toBeVisible();
 
     // -- Step 5: Verify customer details section --
     await expect(page.getByText('Customer Details')).toBeVisible();
@@ -123,31 +123,14 @@ test.describe('Booking Management — Critical Happy Paths', () => {
     await login(page);
     await clearBookings(page);
 
-    // -- Step 2: Book the first available event --
-    await page.goto(`${BASE_URL}/events`);
-    const firstCard = page.getByTestId('event-card').filter({
-      has: page.getByTestId('book-now-btn'),
-    }).first();
-    await expect(firstCard).toBeVisible();
-    await firstCard.getByTestId('book-now-btn').click();
-    await expect(page).toHaveURL(/\/events\/\d+/);
+    // -- Step 2: Book the first available event (ends on confirmation card) --
+    const { bookingRef } = await bookEvent(page);
 
-    await page.getByLabel('Full Name').fill('Test User');
-    await page.locator('#customer-email').fill('testuser@example.com');
-    await page.getByPlaceholder('+91 98765 43210').fill('9876543210');
-    await page.locator('.confirm-booking-btn').click();
-
-    // -- Step 3: Confirm booking ref appears on confirmation card --
-    const refEl = page.locator('.booking-ref').first();
-    await expect(refEl).toBeVisible();
-    const bookingRef = (await refEl.textContent())?.trim() ?? '';
-    console.log(`Booking confirmed. Ref: ${bookingRef}`);
-
-    // -- Step 4: Click "View My Bookings" link on confirmation card --
+    // -- Step 3: Click "View My Bookings" link on confirmation card --
     await page.getByRole('link', { name: 'View My Bookings' }).click();
     await expect(page).toHaveURL(`${BASE_URL}/bookings`);
 
-    // -- Step 5: Assert the new booking appears in the list --
+    // -- Step 4: Assert the new booking appears in the list --
     const bookingCard = page.getByTestId('booking-card').filter({ hasText: bookingRef });
     await expect(bookingCard).toBeVisible();
   });
@@ -163,7 +146,8 @@ test.describe('Booking Management — Critical Happy Paths', () => {
 
     // -- Step 3: Assert ref starts with the event title's first char --
     const expectedPrefix = eventTitle[0].toUpperCase();
-    expect(bookingRef).toMatch(new RegExp(`^${expectedPrefix}-[A-Z0-9]{6}$`));
+    expect(bookingRef.startsWith(`${expectedPrefix}-`)).toBe(true);
+    expect(bookingRef).toMatch(/^.-[A-Z0-9]{6}$/);
     console.log(`Ref "${bookingRef}" correctly starts with "${expectedPrefix}-" (event: "${eventTitle}")`);
   });
 
@@ -194,8 +178,8 @@ test.describe('Booking Management — Critical Happy Paths', () => {
     await expect(page).toHaveURL(`${BASE_URL}/bookings`);
     await expect(page.getByText('Booking cancelled successfully')).toBeVisible();
 
-    // -- Step 7: Assert booking is no longer in the list --
-    await expect(page.getByText('No bookings yet')).toBeVisible();
+    // -- Step 7: Assert the cancelled booking is no longer in the list --
+    await expect(page.getByTestId('booking-card').filter({ hasText: bookingRef })).toHaveCount(0);
   });
 
   // TC-004 ───────────────────────────────────────────────────────────────────

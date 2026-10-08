@@ -35,7 +35,7 @@
 - Add button: `#add-event-btn`
 
 ## Bookings Page
-- Booking cards: `#booking-card`
+- Booking cards: `getByTestId('booking-card')` (also has `#booking-card`; prefer the test id)
 - View Details link: `getByRole('link', { name: 'View Details' })`
 - Clear all link: visible at top when bookings exist
 
